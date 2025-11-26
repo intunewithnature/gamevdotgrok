@@ -12,6 +12,7 @@ interface ConnectionContext {
   gameId: string;
 }
 
+/** Tracks one timeout per game and executes a callback when the deadline hits. */
 class PhaseTimer {
   private timers = new Map<string, NodeJS.Timeout>();
 
@@ -33,6 +34,13 @@ class PhaseTimer {
   }
 }
 
+/**
+ * WebSocket gateway responsible for:
+ * - binding sockets to games/players,
+ * - routing client messages into engine transitions,
+ * - broadcasting per-player game views, and
+ * - driving phase timers forward when clients stall.
+ */
 export class WebSocketGateway {
   private contexts = new Map<WebSocket, ConnectionContext>();
   private rooms = new Map<string, Set<WebSocket>>();
@@ -42,6 +50,7 @@ export class WebSocketGateway {
     this.timers = new PhaseTimer(gameId => this.onPhaseTimeout(gameId));
   }
 
+  /** Binds the gateway to an HTTP server and starts accepting connections. */
   attach(server: http.Server): void {
     const wss = new WebSocketServer({ server });
     wss.on("connection", socket => {
@@ -51,6 +60,7 @@ export class WebSocketGateway {
     });
   }
 
+  /** Parses an incoming payload and dispatches typed client messages. */
   private handleMessage(socket: WebSocket, raw: string): void {
     try {
       const message: ClientMessage = JSON.parse(raw);
@@ -67,6 +77,7 @@ export class WebSocketGateway {
     }
   }
 
+  /** Executes the correct handler for the parsed client message. */
   private handleClientMessage(socket: WebSocket, msg: ClientMessage): void {
     try {
       switch (msg.type) {
@@ -107,6 +118,7 @@ export class WebSocketGateway {
     }
   }
 
+  /** Ensures the socket previously joined a game and has an attached identity. */
   private requireContext(socket: WebSocket): ConnectionContext {
     const ctx = this.contexts.get(socket);
     if (!ctx) {
@@ -115,6 +127,10 @@ export class WebSocketGateway {
     return ctx;
   }
 
+  /**
+   * Validates that the payload references the same game/player the socket authenticated as,
+   * preventing cross-game spoofing.
+   */
   private requireValidAction(ctx: ConnectionContext, gameId: string, playerId?: string): void {
     if (ctx.gameId !== gameId) {
       throw new GameRuleError("WRONG_GAME", "Payload references another game");
@@ -124,6 +140,7 @@ export class WebSocketGateway {
     }
   }
 
+  /** Adds a socket to the per-game room list and stores its context. */
   private attachSocket(socket: WebSocket, ctx: ConnectionContext): void {
     this.contexts.set(socket, ctx);
     const room = this.rooms.get(ctx.gameId) ?? new Set<WebSocket>();
@@ -131,6 +148,7 @@ export class WebSocketGateway {
     this.rooms.set(ctx.gameId, room);
   }
 
+  /** Removes socket bookkeeping and marks the player disconnected inside the game state. */
   private detach(socket: WebSocket): void {
     const ctx = this.contexts.get(socket);
     if (!ctx) return;
@@ -177,6 +195,7 @@ export class WebSocketGateway {
     }
   }
 
+  /** Persists and fan-outs the latest state, hydrating per-player views before sending. */
   private broadcastState(game: GameState): void {
     this.store.update(game.gameId, game);
     this.timers.schedule(game);
@@ -196,6 +215,7 @@ export class WebSocketGateway {
     }
   }
 
+  /** Called by PhaseTimer whenever a phase deadline elapses without client input. */
   private onPhaseTimeout(gameId: string): void {
     const game = this.store.get(gameId);
     if (!game) return;
@@ -227,6 +247,10 @@ export class WebSocketGateway {
     }
   }
 
+  /**
+   * CREATE_GAME → seeds a fresh lobby, attaches the socket, and emits GAME_CREATED + GAME_STATE.
+   * No prior context is required.
+   */
   private handleCreateGame(
     socket: WebSocket,
     payload: { accountId: string; name: string; minPlayers?: number }
@@ -250,6 +274,9 @@ export class WebSocketGateway {
     this.broadcastState(game);
   }
 
+  /**
+   * JOIN_GAME → adds a new player to the lobby and subscribes the socket to future broadcasts.
+   */
   private handleJoinGame(
     socket: WebSocket,
     payload: { gameId: string; accountId: string; name: string }
@@ -270,6 +297,9 @@ export class WebSocketGateway {
     this.broadcastState(game);
   }
 
+  /**
+   * START_GAME → host-only action that transitions the lobby to NIGHT via transitions.startGame.
+   */
   private handleStartGame(socket: WebSocket, payload: { gameId: string; playerId: string }): void {
     const ctx = this.requireContext(socket);
     this.requireValidAction(ctx, payload.gameId, payload.playerId);
@@ -287,6 +317,9 @@ export class WebSocketGateway {
     this.broadcastState(next);
   }
 
+  /**
+   * NIGHT_VOTE → proxies traitor kill votes to transitions.recordNightVote and resolves immediately on unanimity.
+   */
   private handleNightVote(
     socket: WebSocket,
     payload: { gameId: string; playerId: string; targetId: string }
@@ -305,6 +338,9 @@ export class WebSocketGateway {
     }
   }
 
+  /**
+   * DAY_NOMINATE → writes the player's nomination and lets the engine auto-start a trial on majority.
+   */
   private handleDayNominate(
     socket: WebSocket,
     payload: { gameId: string; playerId: string; targetId: string }
@@ -318,6 +354,9 @@ export class WebSocketGateway {
     this.broadcastState(updated);
   }
 
+  /**
+   * TRIAL_CHAT → allows only the accused player to speak during a trial; broadcasts to the room.
+   */
   private handleTrialChat(
     socket: WebSocket,
     payload: { gameId: string; playerId: string; text: string }
@@ -345,6 +384,9 @@ export class WebSocketGateway {
     this.broadcast(payload.gameId, message);
   }
 
+  /**
+   * DAY_VERDICT_VOTE → records verdict ballots and auto-resolves once every living voter responded.
+   */
   private handleVerdictVote(
     socket: WebSocket,
     payload: { gameId: string; playerId: string; choice: VerdictChoice }
@@ -363,6 +405,10 @@ export class WebSocketGateway {
     }
   }
 
+  /**
+   * LEAVE_GAME → removes the player from the lobby or marks them disconnected mid-match.
+   * Also detaches the socket from future broadcasts.
+   */
   private handleLeaveGame(socket: WebSocket, payload: { gameId: string; playerId: string }): void {
     const ctx = this.requireContext(socket);
     this.requireValidAction(ctx, payload.gameId, payload.playerId);

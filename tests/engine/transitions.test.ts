@@ -97,6 +97,40 @@ describe("night phase", () => {
     expect(resolved.lastKilledId).toBe("s1");
     expect(resolved.dayNumber).toBe(2);
   });
+
+  it("rejects night votes from players not scheduled to vote", () => {
+    const badState = makeState({
+      players: [createPlayer("t1", "TRAITOR"), createPlayer("s1")],
+      phase: "NIGHT",
+      nightVotes: {}
+    });
+    expect(() => transitions.recordNightVote(badState, "t1", "s1")).toThrowError(GameRuleError);
+  });
+
+  it("breaks night vote ties using supplied RNG", () => {
+    const base = makeState({
+      players: [
+        createPlayer("t1", "TRAITOR"),
+        createPlayer("t2", "TRAITOR"),
+        createPlayer("s1"),
+        createPlayer("s2")
+      ],
+      phase: "NIGHT",
+      nightVotes: { t1: "s1", t2: "s2" }
+    });
+    const resolved = transitions.resolveNight(base, 500, () => 0.9);
+    expect(resolved.lastKilledId).toBe("s2");
+  });
+
+  it("ignores votes that reference already-dead targets", () => {
+    const base = makeState({
+      players: [createPlayer("t1", "TRAITOR"), { ...createPlayer("s1"), alive: false }],
+      phase: "NIGHT",
+      nightVotes: { t1: "s1" }
+    });
+    const resolved = transitions.resolveNight(base, 123);
+    expect(resolved.lastKilledId).toBeNull();
+  });
 });
 
 describe("day and verdict phases", () => {
@@ -145,6 +179,43 @@ describe("day and verdict phases", () => {
     const resolved = transitions.resolveDayVerdict(verdictGame, 0);
     expect(resolved.players.find(p => p.playerId === "p3")?.alive).toBe(true);
   });
+
+  it("immediately ends the game when the last traitor is hanged", () => {
+    const verdictGame = makeState({
+      players: [createPlayer("s1"), createPlayer("s2"), createPlayer("t1", "TRAITOR")],
+      phase: "DAY_VERDICT",
+      accusedId: "t1",
+      verdictVotes: { s1: "HANG", s2: "HANG", t1: "SPARE" }
+    });
+    const resolved = transitions.resolveDayVerdict(verdictGame, 0);
+    expect(resolved.phase).toBe("GAME_OVER");
+    expect(resolved.winner).toBe("SUBJECTS");
+  });
+
+  it("ignores null votes from disconnected players when resolving", () => {
+    const verdictGame = makeState({
+      players: [
+        createPlayer("p1"),
+        { ...createPlayer("p2"), connected: false },
+        createPlayer("p3")
+      ],
+      phase: "DAY_VERDICT",
+      accusedId: "p3",
+      verdictVotes: { p1: "HANG", p2: null, p3: "SPARE" }
+    });
+    const resolved = transitions.resolveDayVerdict(verdictGame, 0);
+    expect(resolved.players.find(p => p.playerId === "p3")?.alive).toBe(true);
+  });
+
+  it("detects when not all verdict votes are in", () => {
+    const verdictGame = makeState({
+      players: [createPlayer("p1"), createPlayer("p2")],
+      phase: "DAY_VERDICT",
+      accusedId: "p2",
+      verdictVotes: { p1: "HANG", p2: null }
+    });
+    expect(transitions.areAllVerdictVotesIn(verdictGame)).toBe(false);
+  });
 });
 
 describe("utility transitions", () => {
@@ -163,5 +234,14 @@ describe("utility transitions", () => {
       false
     );
     expect(game.players[0].connected).toBe(false);
+  });
+
+  it("prevents night from starting before roles are assigned", () => {
+    const lobby = transitions.createInitialGame("g", {
+      accountId: "host",
+      playerId: "host",
+      name: "Host"
+    });
+    expect(() => transitions.startNight(lobby, 0)).toThrowError(GameRuleError);
   });
 });
