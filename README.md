@@ -1,27 +1,28 @@
 # Impious Werewolf Engine
 
-Server-only Werewolf/Mafia game for impious.io. In-memory, WS-driven, pure engine core.
+A server-only Werewolf/Mafia backend for [impious.io](https://impious.io). The codebase pairs a functional TypeScript engine with an imperative Express + `ws` shell. State is stored in-memory, and every client interaction flows through WebSockets.
 
-## Architecture
-- **engine/**: Deterministic state machine (types/utils/win/transitions).
-- **server/**: Store + HTTP/WS handlers + entrypoint.
-- **shared/**: WS message types + views (hides roles/votes).
-- **tests/**: Engine units.
+## Quickstart
 
-## Setup & Run
-npm install
-npm run dev  # TSX watch
-npm run test # Vitest
+```bash
+npm install          # install dependencies
+npm run dev          # start HTTP + WS server with hot reload
+npm run test         # execute deterministic Vitest suite
+```
 
-## WS Workflow
-1. Client: CREATE_GAME → Server creates lobby, sends GAME_CREATED.
-2. JOIN_GAME → Add to lobby, broadcast PLAYER_JOINED + state.
-3. Host: START_GAME → Assign roles, NIGHT phase, schedule timers.
-4. NIGHT: Traitors vote → Auto-resolve on complete/timer.
-5. DAY: Nominate → Trial if majority → Verdict vote → Resolve/hang/spare.
-6. Timers auto-advance; broadcasts per-player views.
+The dev server listens on `PORT` (default `3000`). Health probes live at `GET /health`, while `GET /games/:id` exposes raw game state for debugging only.
 
-Debug: GET /games/:id (raw state).
+## Architecture at a Glance
 
-## Engine Layer (src/engine)
-Pure functions: no side effects, deterministic. Input → output, throw GameRuleError for invalids.
+- `src/engine/` – Pure domain logic and transitions. No I/O, no clocks; callers pass timestamps/RNG explicitly.
+- `src/server/` – Express app, WebSocket gateway, phase timers, and the in-memory `GameStore`.
+- `src/shared/` – Client/server message contracts plus `buildGameView`, which redacts hidden roles per viewer.
+- `tests/` – Vitest specs targeting win conditions, transitions, voting edge cases, and parity scenarios.
+- `docs/engine.md` – Detailed phase flow, invariants, and API reference for the engine core.
+
+## Developing Features Safely
+
+1. Treat `GameState` snapshots as immutable. Every transition returns a cloned copy that the server then persists.
+2. Use `GameRuleError` to communicate invalid actions (wrong phase, double votes, etc.); the WebSocket gateway forwards these as structured `ERROR` messages.
+3. Keep new behavior deterministic by threading timestamps and RNG functions through transitions.
+4. Update `docs/engine.md` whenever you alter phase flows or invariants so client engineers stay in sync.

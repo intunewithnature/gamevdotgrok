@@ -2,8 +2,10 @@ import { GameState, Winner } from "./types";
 import { countAlive } from "./utils";
 
 /**
- * Determines whether the game has a winner.
- * Traitors win on parity (>= subjects). Draw if everyone dies.
+ * Computes the terminal winner (if any) for the supplied state.
+ * - Draw when no living players remain.
+ * - Subjects win once every traitor is dead.
+ * - Traitors win immediately on parity (traitorsAlive >= subjectsAlive).
  */
 export function checkWin(state: GameState): Winner | null {
   if (state.winner) return state.winner;

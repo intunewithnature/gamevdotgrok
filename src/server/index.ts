@@ -3,6 +3,8 @@ import { createHttpApp } from "./http";
 import { GameStore } from "./store";
 import { WebSocketGateway } from "./ws";
 
+// Simple bootstrap that wires the in-memory store to HTTP + WebSocket layers.
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const store = new GameStore();
