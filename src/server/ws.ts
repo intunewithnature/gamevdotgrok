@@ -5,6 +5,7 @@ import { ClientMessage, ServerMessage, buildGameView } from "../shared/messages"
 import { GameRuleError, GameState, VerdictChoice } from "../engine/types";
 import * as transitions from "../engine/transitions";
 import { GameStore } from "./store";
+import { resolveChatRoute } from "./chat";
 
 interface ConnectionContext {
   accountId: string;
@@ -38,6 +39,7 @@ class PhaseTimer {
  * WebSocket gateway responsible for:
  * - binding sockets to games/players,
  * - routing client messages into engine transitions,
+ * - enforcing chat permissions/routing,
  * - broadcasting per-player game views, and
  * - driving phase timers forward when clients stall.
  */
@@ -101,6 +103,9 @@ export class WebSocketGateway {
           break;
         case "TRIAL_CHAT":
           this.handleTrialChat(socket, msg.payload);
+          break;
+        case "CHAT":
+          this.handleChat(socket, msg.payload);
           break;
         case "DAY_VERDICT_VOTE":
           this.handleVerdictVote(socket, msg.payload);
@@ -382,6 +387,63 @@ export class WebSocketGateway {
       payload: { gameId: payload.gameId, playerId: payload.playerId, text, timestamp: Date.now() }
     };
     this.broadcast(payload.gameId, message);
+  }
+
+  /**
+   * CHAT → phase-aware generic chat that the server routes to the correct audience.
+   * Trial chat must continue using the dedicated TRIAL_CHAT message.
+   */
+  private handleChat(
+    socket: WebSocket,
+    payload: { gameId: string; playerId: string; text: string }
+  ): void {
+    const ctx = this.requireContext(socket);
+    this.requireValidAction(ctx, payload.gameId, payload.playerId);
+
+    const game = this.store.get(payload.gameId);
+    if (!game) {
+      throw new GameRuleError("GAME_NOT_FOUND", "Game not found");
+    }
+
+    const playersById = new Map(game.players.map(player => [player.playerId, player] as const));
+    const sender = playersById.get(payload.playerId);
+    if (!sender) {
+      throw new GameRuleError("PLAYER_NOT_FOUND", "Player not found in game");
+    }
+
+    const text = payload.text.trim();
+    if (text.length === 0 || text.length > 300) {
+      throw new GameRuleError("BAD_TEXT", "Chat must be 1-300 characters");
+    }
+
+    const route = resolveChatRoute(game, sender);
+    const message: ServerMessage = {
+      type: "CHAT",
+      payload: {
+        gameId: game.gameId,
+        playerId: sender.playerId,
+        text,
+        channel: route.channel,
+        timestamp: Date.now()
+      }
+    };
+
+    if (route.audience === "ROOM") {
+      this.broadcast(game.gameId, message);
+      return;
+    }
+
+    const room = this.rooms.get(game.gameId);
+    if (!room) return;
+
+    for (const peer of room) {
+      const peerCtx = this.contexts.get(peer);
+      if (!peerCtx) continue;
+      const peerPlayer = playersById.get(peerCtx.playerId);
+      if (peerPlayer && peerPlayer.role === "TRAITOR" && peerPlayer.alive) {
+        this.send(peer, message);
+      }
+    }
   }
 
   /**

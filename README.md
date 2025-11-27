@@ -19,6 +19,13 @@ The dev server listens on `PORT` (default `3000`). Health probes live at `GET /h
 - `src/shared/` – Client/server message contracts plus `buildGameView`, which redacts hidden roles per viewer.
 - `tests/` – Vitest specs targeting win conditions, transitions, voting edge cases, and parity scenarios.
 - `docs/engine.md` – Detailed phase flow, invariants, and API reference for the engine core.
+- `docs/protocol.md` – WebSocket message contracts and phase-aware chat policy.
+
+### Chat Protocol
+
+The lobby/day/night chat rules (who can speak, which channel is used, and who hears it)
+are enforced solely by the WebSocket layer. See `docs/protocol.md` for the canonical
+matrix of allowed speakers plus the `CHAT` vs `TRIAL_CHAT` message formats.
 
 ## Developing Features Safely
 
