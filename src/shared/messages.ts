@@ -1,6 +1,18 @@
 import { GameState, Phase, Role, VerdictChoice, Winner } from "../engine/types";
 
 /**
+ * Rendered chat streams. TRIAL uses a dedicated TRIAL_CHAT payload but is listed
+ * here for clarity so clients can present a consistent set of channels.
+ *
+ * - LOBBY: everyone pre-game via CHAT.
+ * - DAY: living players during DAY_DISCUSSION or DAY_VERDICT via CHAT.
+ * - NIGHT_TRAITORS: living traitors at night via CHAT (traitor-only visibility).
+ * - TRIAL: accused-only via TRIAL_CHAT (generic CHAT is rejected during trials).
+ * - GAME_OVER: post-game lobby via CHAT (current policy: everyone may talk).
+ */
+export type ChatChannel = "LOBBY" | "DAY" | "NIGHT_TRAITORS" | "TRIAL" | "GAME_OVER";
+
+/**
  * All actions that a client may issue over the WebSocket channel.
  * Each variant is only valid during certain phases and the server enforces that
  * the authenticated socket/player IDs match the payload.
@@ -20,6 +32,11 @@ export type ClientMessage =
   | { type: "DAY_NOMINATE"; payload: { gameId: string; playerId: string; targetId: string } }
   /** Accused-only chat message while on trial. */
   | { type: "TRIAL_CHAT"; payload: { gameId: string; playerId: string; text: string } }
+  /**
+   * Phase-aware chat routed by the server. The sender never specifies the channel;
+   * it is derived from the current phase and the sender's role/status.
+   */
+  | { type: "CHAT"; payload: { gameId: string; playerId: string; text: string } }
   /** Living player verdict vote (HANG/SPARE) during DAY_VERDICT. */
   | { type: "DAY_VERDICT_VOTE"; payload: { gameId: string; playerId: string; choice: VerdictChoice } };
 
@@ -93,12 +110,14 @@ export function buildGameView(game: GameState, viewerId: string): GameView {
 }
 
 /**
- * Messages emitted by the server. Every payload includes a sanitized GameView unless the
- * event is informational (ERROR / TRIAL_CHAT).
+ * Messages emitted by the server. GAME_STATE events include a per-player GameView.
+ * CHAT carries phase-aware conversations while TRIAL_CHAT remains a dedicated stream
+ * for the accused during TRIAL.
  */
 export type ServerMessage =
   | { type: "ERROR"; payload: { code: string; message: string } }
   | { type: "GAME_CREATED"; payload: { game: GameView; playerId: string } }
   | { type: "PLAYER_JOINED"; payload: { game: GameView; playerId: string } }
   | { type: "GAME_STATE"; payload: { game: GameView } }
+  | { type: "CHAT"; payload: { gameId: string; playerId: string; text: string; channel: ChatChannel; timestamp: number } }
   | { type: "TRIAL_CHAT"; payload: { gameId: string; playerId: string; text: string; timestamp: number } };
